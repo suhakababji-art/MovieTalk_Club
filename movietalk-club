@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MovieTalk Club | English Dept</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700;900&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, deleteDoc, getDocs, doc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'movietalk-club-prod';
+
+        let currentUser = null;
+        let unsubscribeShows = null;
+        const ADMIN_PWD = "mtc.english";
+        const apiKey = ""; 
+
+        // Rule 3: Auth first, then Firestore
+        const initAuth = async () => {
+            try {
+                await signInAnonymously(auth);
+            } catch (e) {
+                console.error("Auth failed", e);
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            if (user) {
+                listenToShows();
+            } else if (unsubscribeShows) {
+                unsubscribeShows();
+            }
+        });
+
+        initAuth();
+
+        function listenToShows() {
+            if (!currentUser) return;
+            const showsRef = collection(db, 'artifacts', appId, 'public', 'data', 'shows');
+            const q = query(showsRef); 
+
+            unsubscribeShows = onSnapshot(q, (snapshot) => {
+                const shows = [];
+                snapshot.forEach((doc) => shows.push({ id: doc.id, ...doc.data() }));
+                shows.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                renderShows(shows);
+            }, (error) => {
+                console.error("Permission Error:", error);
+            });
+        }
+
+        function renderShows(shows) {
+            const list = document.getElementById('shows-list');
+            if (shows.length === 0) {
+                list.innerHTML = `<div class="bg-white rounded-3xl p-10 text-center border-2 border-dashed brown-border"><p class="opacity-50 font-bold">لا توجد عروض حالياً..</p></div>`;
+                return;
+            }
+            list.innerHTML = shows.map(show => `
+                <div class="bg-white rounded-3xl shadow-sm overflow-hidden flex flex-col md:flex-row border-2 brown-border hover:shadow-xl transition-all duration-300">
+                    <div class="brown-bg md:w-1/3 p-10 flex flex-col items-center justify-center text-white text-center">
+                        <h4 class="text-2xl font-black english-font tracking-tight">${show.title}</h4>
+                        <div class="w-12 h-1 bg-[#4DB6AC] rounded-full mt-4"></div>
+                    </div>
+                    <div class="p-8 md:w-2/3 flex flex-col justify-center">
+                        <div class="flex flex-wrap gap-2 text-xs font-bold mb-4">
+                            <span class="bg-stone-100 px-3 py-1.5 rounded-lg text-stone-600">📅 ${show.date}</span>
+                            <span class="bg-stone-100 px-3 py-1.5 rounded-lg text-stone-600">🕒 ${show.time}</span>
+                            <span class="bg-teal-50 px-3 py-1.5 rounded-lg teal-text border border-teal-100">📍 ${show.room}</span>
+                        </div>
+                        <p class="text-lg leading-relaxed text-stone-700 font-medium">${show.desc}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        window.addNewShow = async () => {
+            if (!currentUser) return;
+            const title = document.getElementById('new-title').value.trim();
+            const date = document.getElementById('new-date').value.trim();
+            const time = document.getElementById('new-time').value.trim();
+            const room = document.getElementById('new-room').value.trim();
+            const desc = document.getElementById('new-desc').value.trim();
+
+            if (title && date && time && room && desc) {
+                try {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'shows'), {
+                        title, date, time, room, desc, createdAt: Date.now()
+                    });
+                    alert("تم النشر بنجاح!");
+                    window.closeAdminBoxes();
+                    ['new-title', 'new-date', 'new-time', 'new-room', 'new-desc'].forEach(id => document.getElementById(id).value = '');
+                } catch (e) { alert("Error: " + e.message); }
+            } else { alert("يرجى إكمال البيانات"); }
+        };
+
+        window.clearAllData = async () => {
+            if (!currentUser || !confirm("حذف كل البيانات؟")) return;
+            try {
+                const snapshot = await getDocs(collection(db, 'artifacts', appId, 'public', 'data', 'shows'));
+                const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'shows', d.id)));
+                await Promise.all(deletePromises);
+                alert("تم الحذف.");
+                window.closeAdminBoxes();
+            } catch (e) { alert("Error"); }
+        };
+
+        window.showTab = (tabId) => {
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        let clickCount = 0;
+        window.handleFooterClick = () => {
+            clickCount++;
+            if (clickCount >= 5) {
+                clickCount = 0;
+                document.getElementById('admin-login-box').classList.remove('hidden');
+            }
+        };
+
+        window.verifyPassword = () => {
+            if (document.getElementById('admin-pass-input').value === ADMIN_PWD) {
+                document.getElementById('admin-login-box').classList.add('hidden');
+                document.getElementById('admin-section').classList.remove('hidden');
+            } else { alert("خطأ"); }
+        };
+
+        window.closeAdminBoxes = () => {
+            document.getElementById('admin-login-box').classList.add('hidden');
+            document.getElementById('admin-section').classList.add('hidden');
+        };
+
+        window.generateAIAnalysis = async () => {
+            const movieTitle = document.getElementById('movie-input').value.trim();
+            if (!movieTitle) return;
+            const resultDiv = document.getElementById('ai-result');
+            const content = document.getElementById('ai-content');
+            resultDiv.classList.remove('hidden');
+            content.innerHTML = "جاري التحليل...";
+            try {
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts: [{ text: `Analyze movie: ${movieTitle}` }] }],
+                        systemInstruction: { parts: [{ text: "Analysis: Themes, Discussion, Vocab. English." }] }
+                    })
+                });
+                const data = await response.json();
+                const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                content.innerHTML = text ? text.replace(/\*\*(.*?)\*\*/g, '<strong class="teal-text">$1</strong>').replace(/\n/g, '<br>') : "Error.";
+            } catch (e) { content.innerHTML = "Error."; }
+        };
+    </script>
+
+    <style>
+        body { font-family: 'Tajawal', sans-serif; background-color: #F5F5DC; color: #5D4037; }
+        .english-font { font-family: 'Playfair Display', serif; }
+        .teal-bg { background-color: #008080; }
+        .teal-text { color: #008080; }
+        .light-teal-bg { background-color: #E0F2F1; }
+        .brown-bg { background-color: #5D4037; }
+        .brown-border { border-color: #D7CCC8; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .admin-panel { border: 3px solid #008080; padding: 25px; border-radius: 24px; background: #ffffff; }
+    </style>
+</head>
+<body class="min-h-screen">
+    <nav class="teal-bg text-white shadow-lg sticky top-0 z-50 p-4">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-black">MovieTalk Club</h1>
+            <div class="flex gap-4 font-bold text-sm">
+                <button onclick="showTab('home')">الرئيسية</button>
+                <button onclick="showTab('ai-assistant')" class="text-amber-200">✨ المحلل</button>
+                <button onclick="showTab('contact')">المسؤولين</button>
+            </div>
+        </div>
+    </nav>
+
+    <header class="light-teal-bg py-16 px-6 text-center border-b brown-border">
+        <h2 class="text-4xl font-black mb-2 teal-text english-font italic">Watch. Discuss. Learn.</h2>
+        <h3 class="text-xl font-bold text-[#5D4037] english-font">MovieTalk Club English Dept</h3>
+    </header>
+
+    <main class="container mx-auto p-6 max-w-4xl py-12">
+        <section id="home" class="tab-content active space-y-8">
+            <h3 class="text-3xl font-bold border-r-8 border-[#008080] pr-4">العروض القادمة</h3>
+            
+            <div id="admin-login-box" class="hidden bg-white p-6 rounded-3xl shadow-xl border-2 border-[#008080] text-center space-y-4">
+                <input type="password" id="admin-pass-input" class="p-3 border-2 rounded-xl text-center" placeholder="كلمة السر...">
+                <button onclick="verifyPassword()" class="teal-bg text-white px-6 py-3 rounded-xl font-black">دخول</button>
+            </div>
+
+            <div id="admin-section" class="hidden admin-panel mb-10">
+                <div class="grid gap-4">
+                    <input type="text" id="new-title" placeholder="اسم الفيلم (English)" class="p-3 rounded-xl border-2">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <input type="text" id="new-date" placeholder="التاريخ" class="p-3 rounded-xl border-2">
+                        <input type="text" id="new-time" placeholder="الوقت" class="p-3 rounded-xl border-2">
+                        <input type="text" id="new-room" placeholder="رقم القاعة" class="p-3 rounded-xl border-2">
+                    </div>
+                    <textarea id="new-desc" placeholder="وصف النقاش..." class="p-3 rounded-xl border-2 h-24"></textarea>
+                    <button onclick="addNewShow()" class="teal-bg text-white p-4 rounded-xl font-black">نشر للجميع 🚀</button>
+                    <button onclick="clearAllData()" class="text-red-500 text-xs mt-4 underline">حذف كل العروض</button>
+                </div>
+            </div>
+
+            <div id="shows-list" class="space-y-8 min-h-[100px]"></div>
+        </section>
+
+        <section id="ai-assistant" class="tab-content space-y-6 max-w-2xl mx-auto">
+            <div class="bg-white p-8 rounded-[2rem] shadow-xl text-center">
+                <h3 class="text-2xl font-black teal-text mb-4">🤖 المحلل الذكي</h3>
+                <input type="text" id="movie-input" placeholder="Movie Name..." class="w-full p-4 rounded-2xl border-2 mb-4 text-center">
+                <button onclick="generateAIAnalysis()" id="ai-btn" class="teal-bg text-white font-bold py-4 px-8 rounded-2xl w-full">تحليل ✨</button>
+                <div id="ai-result" class="hidden mt-8 p-6 bg-stone-50 rounded-2xl text-left text-sm" dir="ltr">
+                    <div id="ai-content"></div>
+                </div>
+            </div>
+        </section>
+
+        <section id="contact" class="tab-content max-w-md mx-auto text-center">
+            <div class="bg-white p-8 rounded-[2rem] border-4 border-[#008080]">
+                <h4 class="text-2xl font-black mb-1">Suha Kababji</h4>
+                <a href="tel:0593259597" class="text-3xl font-black teal-text" dir="ltr">0593259597</a>
+            </div>
+        </section>
+    </main>
+
+    <footer onclick="handleFooterClick()" class="brown-bg text-[#D7CCC8] py-16 mt-20 text-center cursor-pointer">
+        <h4 class="text-white font-black text-2xl mb-2 english-font italic">MovieTalk Club</h4>
+        <p class="text-xs font-bold">English Department | © 2026</p>
+    </footer>
+</body>
+</html>
